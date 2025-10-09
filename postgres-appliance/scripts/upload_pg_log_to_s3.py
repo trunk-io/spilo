@@ -23,7 +23,7 @@ def get_file_names():
 
     if os.getenv('LOG_SHIP_HOURLY') == 'true':
         prev_interval = datetime.now() - timedelta(hours=1)
-        prev_interval_number = prev_interval.strftime('%u-%H')
+        prev_interval_number = prev_interval.strftime('%H')
         upload_filename = prev_interval.strftime('%F-%H')
 
     log_file = os.path.join(os.getenv('PGLOG'), 'postgresql-' + prev_interval_number + '.csv')
