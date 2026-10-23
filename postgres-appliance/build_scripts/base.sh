@@ -69,6 +69,20 @@ apt-get install -y \
 # forbid creation of a main cluster when package is installed
 sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf
 
+# Prints "=<version>" for the newest version of package $1 that is <= $2, or nothing when $2 is empty.
+# Fails when no such version exists, so a cap never silently installs the newest.
+version_at_most() {
+    local pkg=$1 cap=$2 v
+    [ -z "$cap" ] && return 0
+    v=$(apt-cache madison "$pkg" | awk -F'|' '{gsub(/ /, "", $2); print $2}' \
+        | while read -r full; do
+            upstream=${full#*:}; upstream=${upstream%%~*}
+            if [ "$(printf '%s\n%s\n' "$upstream" "$cap" | sort -V | tail -n1)" = "$cap" ]; then echo "$full"; fi
+          done | sort -rV | head -n1)
+    [ -n "$v" ] || { echo "no $pkg <= $cap" >&2; return 1; }
+    echo "=$v"
+}
+
 for version in $DEB_PG_SUPPORTED_VERSIONS; do
     sed -i "s/ main.*$/ main $version/g" /etc/apt/sources.list.d/pgdg.list
     apt-get update
@@ -110,10 +124,13 @@ for version in $DEB_PG_SUPPORTED_VERSIONS; do
     fi
 
     if [ "${TIMESCALEDB_APACHE_ONLY}" = "true" ]; then
-        EXTRAS+=("timescaledb-2-oss-postgresql-${version}")
+        ts_pkg="timescaledb-2-oss-postgresql-${version}"
     else
-        EXTRAS+=("timescaledb-2-postgresql-${version}")
+        ts_pkg="timescaledb-2-postgresql-${version}"
     fi
+    # The loader must match, or apt pulls the newest loader in as a dependency.
+    ts_version=$(version_at_most "$ts_pkg" "$TIMESCALEDB")
+    EXTRAS+=("${ts_pkg}${ts_version}" "timescaledb-2-loader-postgresql-${version}${ts_version}")
 
     # Install PostgreSQL binaries, contrib, plproxy and multiple pl's
     apt-get install --allow-downgrades -y \
@@ -143,7 +160,8 @@ for version in $DEB_PG_SUPPORTED_VERSIONS; do
     if [ "${TIMESCALEDB_APACHE_ONLY}" != "true" ] && [ "${TIMESCALEDB_TOOLKIT}" = "true" ]; then
         apt-get update
         if [ "$(apt-cache search --names-only "^timescaledb-toolkit-postgresql-${version}$" | wc -l)" -eq 1 ]; then
-            apt-get install "timescaledb-toolkit-postgresql-$version"
+            tk_version=$(version_at_most "timescaledb-toolkit-postgresql-$version" "$TIMESCALEDB_TOOLKIT_VERSION")
+            apt-get install -y "timescaledb-toolkit-postgresql-${version}${tk_version}"
         else
             echo "Skipping timescaledb-toolkit-postgresql-$version as it's not found in the repository"
         fi
@@ -160,7 +178,10 @@ for version in $DEB_PG_SUPPORTED_VERSIONS; do
             pg_permissions-${PG_PERMISSIONS_COMMIT} \
             pg_profile-${PG_PROFILE} \
             "${EXTRA_EXTENSIONS[@]}"; do
-        make -C "$n" USE_PGXS=1 clean install-strip
+        # Separate runs: under MAKEFLAGS=-j, `clean install-strip` races and can install the
+        # previous major's build. An explicit PG_CONFIG pins the headers to this major.
+        make -C "$n" USE_PGXS=1 PG_CONFIG="/usr/lib/postgresql/$version/bin/pg_config" clean
+        make -C "$n" USE_PGXS=1 PG_CONFIG="/usr/lib/postgresql/$version/bin/pg_config" install-strip
     done
 done
 
