@@ -45,6 +45,9 @@ COPY --from=dependencies-builder /builddeps/*.deb /builddeps/
 ARG PGVERSION
 ARG TIMESCALEDB_APACHE_ONLY=true
 ARG TIMESCALEDB_TOOLKIT=true
+# Highest version to install per PG major; empty installs the newest.
+ARG TIMESCALEDB=
+ARG TIMESCALEDB_TOOLKIT_VERSION=
 ARG COMPRESS
 ARG PGOLDVERSIONS="13 14 15 16"
 ARG WITH_PERL=false
